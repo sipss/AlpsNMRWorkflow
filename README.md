@@ -1,4 +1,4 @@
-# AlpsNMR-Tutorial
+# AlpsNMR-Tutorial <img src='AlpsNMRlogo.png' align="right" height="139" />
 
 Extended tutorial of `AlpsNMR` in large dataset
 
