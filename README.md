@@ -11,7 +11,7 @@ if (!requireNamespace("BiocManager", quietly = TRUE))
 BiocManager::install("AlpsNMR")
 ```
 
-You can download needed data executing included download_demo() function
+You can download needed data executing included [download_demo()](https://github.com/sipss/AlpsNMR-Tutorial/blob/main/download_demo.R) function
 
 Follow the [tutorial](https://github.com/sipss/AlpsNMR-Tutorial/blob/main/Tutorial.pdf) to execute `AlpsNMR` in a real dataset from beginning to end,
 including all the steps of untargeted metabolomics analysis.
