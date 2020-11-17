@@ -1,6 +1,6 @@
 # AlpsNMR-Tutorial <img src='AlpsNMRlogo.png' align="right" height="139" />
 
-Extended tutorial of `AlpsNMR` in large dataset
+Extended tutorial of [AlpsNMR](https://bioconductor.org/packages/release/bioc/html/AlpsNMR.html) in large dataset
 
 For this tutorial you will need install the `AlpsNMR` package
 
