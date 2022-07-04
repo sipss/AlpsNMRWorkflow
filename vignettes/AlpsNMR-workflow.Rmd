@@ -1,0 +1,633 @@
+---
+title: 'NMR-based metabolomic analysis of the dataset MTBLS242: serum samples'
+author: "Institute for Bioengineering of Catalonia"
+date: "November 17, 2020"
+output:
+  BiocStyle::html_document:
+    self_contained: yes
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    code_folding: show
+vignette: >
+  %\VignetteIndexEntry{NMR-based metabolomic analysis of the dataset MTBLS242: serum samples}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8} 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is an example of using the `{AlpsNMR}` package on the MTBLS242 dataset. You can explore the MTBLS242 dataset at the MetaboLights repository: https://www.ebi.ac.uk/metabolights/MTBLS242.
+
+It follows a similar workflow to `vignette("Vig01-introduction-to-alpsnmr", package = "AlpsNMR")`.
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(BiocParallel)
+library(AlpsNMR)
+```
+
+
+# Enable parallellization
+
+This package is able to parallellize several functions through the use of the
+`BiocParallel` package. Whether to parallelize or not is left to the user
+that can control the parallellization registering backends. Please check
+`vignette("Introduction_To_BiocParallel", package = "BiocParallel")`.
+
+```{r}
+#register(SerialParam(progressbar = FALSE), default = TRUE)  # disable parallellization
+register(SnowParam(workers = 3, progressbar = FALSE), default = TRUE)  # enable parallellization with 3 workers
+```
+
+# Data: The `MTBLS242` dataset
+
+We will use a subset of the MTBLS242 dataset. The `{AlpsNMR}` package already
+includes the `AlpsNMR::download_MTBLS242()` function, that will download
+the samples this tutorial needs. Beware the download may be of few hundred megabytes.
+
+
+```{r}
+annotations <- download_MTBLS242()
+annotations
+```
+
+
+# Loading samples
+
+The function to read samples is called `nmr_read_samples()`. It expects a
+character vector with the samples to load that can be paths to directories of
+Bruker format samples or paths to JDX files.
+
+Additionally, this function can filter by pulse sequences (e.g. load only NOESY
+samples) or loading only metadata.
+
+```{r load-samples}
+dataset <- nmr_read_samples_dir("MTBLS242/samples/")
+dataset
+```
+
+# Adding annotations
+
+See how the dataset `names` match the `NMRExperiment` column in our annotations table:
+
+```{r}
+head(names(dataset))
+```
+```{r}
+head(annotations)
+```
+
+So we can add our annotations:
+
+```{r}
+dataset <- nmr_meta_add(dataset, metadata = annotations, by = "NMRExperiment")
+```
+
+
+# Interpolation
+
+1D NMR samples can be interpolated together, in order to arrange all the spectra 
+into a matrix, with one row per sample. Here we choose the 
+range of ppm values that we want to include in further analyses.
+
+```{r}
+dataset <- nmr_interpolate_1D(dataset, axis = c(min = 0.7, max = 10))
+```
+
+
+```{r}
+plot(dataset,
+  NMRExperiment = c(
+  "Obs0_0001s",
+  "Obs0_0002s",
+  "Obs0_0003s",
+  "Obs0_0004s",
+  "Obs1_0001s",
+  "Obs1_0002s",
+  "Obs1_0003s",
+  "Obs1_0004s"),
+  chemshift_range = c(3.40, 3.60), color = "TimePoint")
+```
+
+
+# Exclude regions
+
+Here it is important to know what type of signals can mask the results due to their intensity or what type of solvent has been used in sample processing since this can create artifacts in the spectra and should be removed. In this case, the biological samples correspond to serum, which contains a lot of water and its signal should be removed from further steps.
+To do this, we define a vector containing the range (min ppm value, max ppm value) of the water signal, but other signals can be eliminated, for example: `regions_to_exclude <-  list(water = c(4.5, 5.1), methanol = c(3.33, 3.34))`
+
+
+```{r}
+regions_to_exclude <- list(water = c(4.5, 5.1))
+dataset <- nmr_exclude_region(dataset, exclude = regions_to_exclude)
+plot(dataset, chemshift_range = c(4.2, 5.5))
+```
+
+
+
+
+# Initial Outlier Rejection
+
+The robust principal component analysis (rPCA) for outlier detection gives an idea of potential outliers. A proposed threshold, based on quantiles, for Q residual and T2 score values, results less sensitive to extreme intensities. Then you choose if any sample should be excluded. The plot below indicated that a sample "Obs0_0283s" is extremely different than the other samples. The plot annotates samples that are in the top-right corner, exhibiting high differences.
+
+```{r}
+pca_outliers_rob <- nmr_pca_outliers_robust(dataset, ncomp = 3)
+nmr_pca_outliers_plot(dataset, pca_outliers_rob)
+```
+
+
+# Baseline removal
+
+Spectra may display an unstable baseline, specially when processing
+blood/fecal samples.
+
+The peak detection and integration algorithms benefit from having
+an estimation of the baseline, so it is advisable to compute it first
+and check it fits as expected.
+
+
+See before:
+
+```{r}
+plot(dataset, chemshift_range = c(1.37, 2.5))
+```
+
+
+```{r}
+plot(dataset, chemshift_range = c(3.5,4.2))
+```
+
+Estimate the baseline:
+
+```{r}
+dataset <- nmr_baseline_estimation(dataset, lambda = 9, p = 0.01)
+```
+
+
+
+And after:
+
+
+```{r fig.height=10, fig.width=10}
+experiments_to_plot <- nmr_meta_get(dataset, groups = "external") |>
+  group_by(TimePoint) |>
+  dplyr::slice_head(n=5) |>
+  ungroup() |>
+  arrange("SampleID") |>
+  pull("NMRExperiment")
+
+spectra_to_plot <- tidy(dataset, chemshift_range = c(1., 2.7), NMRExperiment = experiments_to_plot)
+baseline_to_plot <- tidy(dataset, chemshift_range = c(1, 2.7), NMRExperiment = experiments_to_plot, matrix_name = "data_1r_baseline")
+
+ggplot(mapping = aes(x = chemshift, y = intensity, color = NMRExperiment)) +
+  geom_line(data = spectra_to_plot) +
+  geom_line(data = baseline_to_plot, linetype = "dashed") + 
+  scale_x_reverse() +
+  facet_wrap(~NMRExperiment, ncol = 2) +
+  theme(legend.position = "none")
+
+```
+
+
+
+```{r fig.height=10, fig.width=10}
+spectra_to_plot <- tidy(dataset, chemshift_range = c(3.5,4.2), NMRExperiment = experiments_to_plot)
+baseline_to_plot <- tidy(dataset, chemshift_range = c(3.5,4.2), NMRExperiment = experiments_to_plot, matrix_name = "data_1r_baseline")
+
+ggplot(mapping = aes(x = chemshift, y = intensity, color = NMRExperiment)) +
+  geom_line(data = spectra_to_plot) +
+  geom_line(data = baseline_to_plot, linetype = "dashed") + 
+  scale_x_reverse() +
+  facet_wrap(~NMRExperiment, ncol = 2) +
+  theme(legend.position = "none")
+
+```
+
+
+# Peak detection
+
+```{r}
+plot(dataset, chemshift_range = c(9.5, 10))
+```
+
+
+```{r}
+baselineThresh <- nmr_baseline_threshold(dataset, range_without_peaks = c(9.5, 10))
+nmr_baseline_threshold_plot(dataset, baselineThresh, NMRExperiment = experiments_to_plot)
+```
+
+
+```{r}
+peak_list_initial <- nmr_detect_peaks(
+    dataset,
+    nDivRange_ppm = 0.1,
+    scales = seq(1, 16, 2),
+    baselineThresh = baselineThresh,
+    SNR.Th = 3
+)
+```
+
+
+We can get an overview of the number of peaks we detect on each sample and each chemical shift region:
+
+```{r fig.height=10, fig.width=10}
+nmr_detect_peaks_plot_overview(filter(peak_list_initial, startsWith(NMRExperiment, "Obs0")))
+```
+
+```{r fig.height=10, fig.width=10}
+nmr_detect_peaks_plot_overview(filter(peak_list_initial, startsWith(NMRExperiment, "Obs1")))
+```
+
+We can explore in a more detailed way the detected peaks:
+
+```{r}
+nmr_detect_peaks_plot(dataset, peak_list_initial, NMRExperiment = "Obs0_0001s", chemshift_range = c(3, 3.3))
+```
+
+```{r}
+nmr_detect_peaks_plot(dataset, peak_list_initial, NMRExperiment = "Obs0_0001s", chemshift_range = c(6.5, 7))
+```
+```{r}
+peak_list_in_range <- filter(peak_list_initial, ppm > 3.2, ppm < 3.25, NMRExperiment %in% experiments_to_plot)
+peak_list_in_range
+```
+
+
+```{r fig.height=10, fig.width=10}
+nmr_detect_peaks_plot_peaks(
+    dataset,
+    peak_list_initial,
+    peak_ids = peak_list_in_range$peak_id,
+    caption = paste("{peak_id}\n",
+                    "{NMRExperiment}\n",
+                    "gamma(ppb)\u00a0=\u00a0{gamma_ppb}\n",
+                    "area\u00a0=\u00a0{area}")
+)
+```
+
+
+```{r}
+peak_list_initial_accepted <- peaklist_accept_peaks(
+    peak_list_initial,
+    dataset,
+    area_min = 50, 
+    keep_rejected = FALSE,
+    verbose = TRUE
+```
+
+
+# Spectra Alignment
+
+
+```{r}
+NMRExp_ref <- nmr_align_find_ref(dataset, peak_list_initial_accepted)
+message("Your reference is NMRExperiment ", NMRExp_ref)
+```
+
+```{r}
+dataset_align <- nmr_align(
+    nmr_dataset = dataset, 
+    peak_data = peak_list_initial_accepted, 
+    NMRExp_ref = NMRExp_ref, 
+    maxShift_ppm = 0.0015, 
+    acceptLostPeak = TRUE
+)
+```
+
+
+```{r}
+cowplot::plot_grid(
+    plot(dataset, chemshift_range = c(3.22, 3.25)) + theme(legend.position = "none"),
+    plot(dataset_align, chemshift_range = c(3.22, 3.25)) + theme(legend.position = "none")
+)
+```
+
+
+# Normalization
+
+We can normalize the dataset. This is recommended for biosamples, controlling for dilution factors, irregular pipetting, etc. Probabilistic quotient normalization is one of the most used model-based techniques NMR-based metabolomics. 
+
+
+```{r}
+dataset_norm <- nmr_normalize(dataset_align, method = "pqn")
+```
+
+
+```{r}
+normalization_info <- nmr_normalize_extra_info(dataset_norm)
+normalization_info$plot
+```
+
+
+# Peak grouping
+
+If you align or normalize your samples, you should rerun the peak detection to ensure the peak positions and estimations are well calculated:
+
+```{r}
+baselineThresh <- nmr_baseline_threshold(dataset_norm, range_without_peaks = c(9.5, 10))
+nmr_baseline_threshold_plot(dataset_norm, baselineThresh)
+```
+
+```{r}
+peak_list_for_clustering_unfiltered <- nmr_detect_peaks(
+    dataset_norm,
+    nDivRange_ppm = 0.1,
+    scales = seq(1, 16, 2),
+    baselineThresh = baselineThresh,
+    SNR.Th = 3,
+    verbose = TRUE
+)
+
+peak_list_for_clustering <- peaklist_accept_peaks(
+    peak_list_for_clustering_unfiltered,
+    dataset_norm,
+    area_min = 50, 
+    keep_rejected = FALSE,
+    verbose = TRUE
+)
+```
+
+
+```{r}
+clustering <- nmr_peak_clustering(peak_list_for_clustering, verbose = TRUE)
+```
+
+
+```{r}
+cowplot::plot_grid(
+    clustering$num_cluster_estimation$plot + labs(title = "Full"),
+    clustering$num_cluster_estimation$plot +
+        xlim(clustering$num_cluster_estimation$num_clusters-50, clustering$num_cluster_estimation$num_clusters+50) +
+        ylim(0, 10*clustering$num_cluster_estimation$max_dist_thresh_ppb) +
+        labs(title = "Fine region")
+)
+```
+
+
+```{r}
+nmr_peak_clustering_plot(
+    dataset = dataset_norm,
+    peak_list_clustered = peak_list_clustered,
+    NMRExperiments = c("10", "20"),
+    chemshift_range = c(2.4, 3.0)
+)
+```
+
+
+```{r}
+peak_table <- nmr_build_peak_table(peak_list_clustered, dataset_norm)
+peak_table
+```
+
+```{r}
+get_integration_with_metadata(peak_table)
+```
+
+
+# Node 10: Machine learning
+
+Once the pre-processing stage is accomplished, relevant chemical information can be extracted from the data. We are interested in the automatic detection of features responsible for data separation by sample class. These autoselected features will be posteriorly associated to their corresponding metabolites in Node 11. Sample classification is performed using Partial Least Squares Discriminant Analysis (PLSDA). This allows us to use the Variable Important for Projection (VIP) score to rank data features according to their contribution to sample class separation. Feature selection process will be based on setting a threshold value for VIP score of each variable. Additionally, model stability for different train - test partitions of the dataset can be assessed using functions of this package. Different plots will be displayed to visually check the process.
+
+
+## Input parameters
+```{r}
+# Plsda parameters
+max_ncomp = 5
+auc_threshold = 0.05
+label = "Timepoint"
+external_iterations = 2
+internal_iterations = 3
+test_size = 0.25
+
+# Set the number of bootstraps and k-folds
+nbootstraps <- 300
+k <- 4
+
+# For permutation test
+number_of_permutations = 100
+```
+
+
+## Code to run
+
+The optimum number of latent variables for a PLDA model built from the data is obtained from a a double cross-validation based on random subsampling. All models used for selecting data features are created using this number of latent variables.
+
+```{r}
+# We select the maximun number of components to use and the auc
+# threshold that a component must increase to be selected
+methodology <- plsda_auroc_vip_method(ncomp = max_ncomp,
+                                      auc_increment_threshold = auc_threshold)
+model <- nmr_data_analysis(
+    peak_table, # Data to be analized
+    y_column = label, # Label inside data that indicates the class
+    identity_column = NULL,
+    external_val = list(iterations = external_iterations, 
+                        test_size = test_size),
+    internal_val = list(iterations = internal_iterations, 
+                        test_size = test_size),
+    data_analysis_method = methodology
+)
+# The number of components for the bootstrap models is selected
+ncomps <- max(unlist(sapply(sapply(model$outer_cv_results, "[", "model"), "[", "ncomp")))
+```
+
+## Model Performance: Permutation test
+
+The function `permutation_test_model` performs the permutation test. It computes the AUC values of the external loop of the double cross-validation process for each permutation of the labels (Set the number of permutation at "nPerm").
+
+```{r cache= TRUE, message=FALSE, warning=FALSE, echo = TRUE, results = "hide"}
+# We use the same parameters as the data analysis model
+permutations <- permutation_test_model(
+    peak_table,
+    y_column = label,
+    # Label inside data that indicates the class
+    identity_column = NULL,
+    external_val = list(iterations = external_iterations,
+                        test_size = test_size),
+    internal_val = list(iterations = internal_iterations,
+                        test_size = test_size),
+    data_analysis_method = methodology,
+    nPerm = number_of_permutations
+)
+```
+
+### Permutation test plot
+
+Permutation test plot for the  PLS-DA models gives a p-value for the model performance. The actual AUC departs from the null hypothesis distribution.
+
+```{r}
+permutation_test_plot(model, permutations)
+```
+
+
+## Feature selection
+
+Feature selection process is carried out based on the bootstrap and permutation method. In the following paragraph this approach is briefly described. More information about this bootstrap and permutation method can be found here, Ref: http://dx.doi.org/10.1016/j.aca.2013.01.004.
+
+Data is partitioned in k-folds. In each fold, m datasets are generated via bootstrapping. PLSDA models are created for the bootstrapped datasets. Each of these models will provide a VIP scores vector (that is a vector with the VIP score value for every feature). In the same fold, the previous process is repeated but this time each feature is randomly permuted within each bootstrap dataset. As a consequence, two distributions of VIP scores values are obtained for each feature: The first one is related to the true performance of the feature and the second one to the performance of a random selected feature. These two distributions are compared feature by feature. If they are similar, the feature is not relevant. Otherwise it is selected. So, for each fold, a number of features is selected. At the end of the process, only the features that were selected in each of the folds are considered relevant for data separation by sample class. 
+
+We can plot the mean of the vips of all k-folds and its standard deviation. The ones that have the lower bound over the threshold are considered important VIPs.  There are different criteria for selecting  will be discussed in the following section.
+
+
+```{r}
+# Bootstrap and permutation method in k-fold cross validation
+bp_results <-
+    bp_kfold_VIP_analysis(peak_table, # Data to be analized
+                          y_column = label,
+                          k = k,
+                          ncomp = ncomps,
+                          nbootstrap = nbootstraps)
+
+
+plot(bp_results$vip_score_plot)
+```
+
+ We can also plot the scores of a particular fold:
+
+```{r}
+plot_vip_scores(
+    bp_results$kfold_results[[1]]$pls_vip_means,
+    bp_results$kfold_results[[1]]$error[1],
+    nbootstraps
+)
+```
+
+
+### Different criteria for feature selection
+
+There are three ways of selecting data feautes using the bootstrap and permutation method. The first way (1) is the most permissive strategy. It allows you selecting many features, although some of them may not be significant from the statistical point of view. 
+
+The threshold of selection is the mean value of the distribution corresponding the difference of the VIP scores distributions (that is 0). If the mean of the distribution is higher that the threshold, the variable is selected. Second (2) and (3) strategies are much more restrictive. In (2) the two distributions of VIP scores are compared using a  Wilcoxon test at a significance level of 0.05. The null hypothesis is that the two distributions are the same, while the alternative hypothesis they don't. If the null hypothesis is rejected, the variable is selected. Finally, in strategy (3), the two distributions of VIP scores values are subtracted and the 95% confidence intervals around the differences are computed. Then, the t-statistic (_t~1~-~$\alpha$~~/~~2~,~n~-~1~_ where _$\alpha$_ = 0.05 and n is equal to the number of bootstraps). If the 95% confidence interval lowe-bound is higher than t~1~-~$\alpha$~~/~~2~,~n~-~1~_ the variable is selected. Noteworthy, strategy (3) generally provides less number of autoselected features than strategies (1) and (2), giving raise to the most parsimonious final PSLDA models.
+
+
+In this example, the most restrictive strategy (3) for feature selection is applied. You can find less restrictive choices commented in the chunk of code below: 
+
+```{r}
+message("Selected VIPs are: ")
+bp_results$important_vips
+VIPs <- sort(bp_results$important_vips)
+
+# You can select the relevant_vips instead of importat ones if you want 
+# a less restrictive vip selection (strategy (3) slightly modified)
+#bp_results$relevant_vips
+#VIPs <- sort(bp_results$relevant_vips)
+
+# As a even less restrictive method, you can select the vips that pass a
+# wilcoxon test  (strategy (2)
+#bp_results$wilcoxon_vips
+#VIPs <- sort(bp_results$wilcoxon_vips)
+```
+
+
+## Model stability
+
+Note that the previous feature selection process only makes sense if data behaves similar across the different k-fold partitions of the dataset. For stable data, the PLSDA models generated for different data partitions will be similar among them, and consequently, the feature selection process will be consistent. To check that, one thing we can do is to compare the loadings of the different models obtained from the training set in each k-fold by performing its dot product. Loadings from different models but the same latent variable are expected to get dot product values close to 1 (in absolute value) if the models are stable. Likewise, the dot product of loadings from different models and different latent variables is expected to be close to zero. 
+
+The following figure shows all combinations of dot products between loadings from different models (4-fold), and for the particular case of PLSDA models of 1 latent variable: 
+
+```{r}
+# Check the stability of the models of the diferent kfolds 
+models_stability_plot_bootstrap(bp_results)
+```
+
+Another check of model stability can be the inspection of the classification rate (CR) distributions of the bootstrap models obtained for each of the k-folds. CR Distributions with similar mean and standard deviation are expected.
+
+```{r}
+# Inspect the classification rate (CR) distribution of the
+# bootstrap models, for all the folds
+h1 <- unlist(bp_results$kfold_results[[1]]$classif_rate)
+h2 <- unlist(bp_results$kfold_results[[2]]$classif_rate)
+h3 <- unlist(bp_results$kfold_results[[3]]$classif_rate)
+h4 <- unlist(bp_results$kfold_results[[4]]$classif_rate)
+c1 <- rgb(173,216,230,max = 255, alpha = 120, names = "lt.blue")
+c2 <- rgb(255,192,203, max = 255, alpha = 120, names = "lt.pink")
+c3 <- rgb(144,238,144, max = 255, alpha = 120, names = "lt.green")
+c4 <- rgb(64,224,208, max = 255, alpha = 120, names = "lt.yellow")
+
+plot(density(h1), col = c1, main = "Bootstrap models classification rate",
+     xlab = "Classification rate") 
+polygon(density(h1), col=c1, border="blue")
+lines(density(h2), col = c2) 
+polygon(density(h2), col=c2, border="pink")
+lines(density(h3), col = c3) 
+polygon(density(h3), col=c3, border="green")
+lines(density(h4), col = c4)    
+polygon(density(h4), col=c4, border="turquoise")
+```
+
+Since model stability seems good enough, we can inspect the separability of the classes projecting on the same latent variable space the test samples for the different k partitions of the dataset. This way, all samples in the dataset are employed as test samples. Since each of the PLSDA models have just one latent variable this result is automatically represented with histograms. In case of having models with more of one latent variable, the first two latent variables are used to generate a scores plot.
+
+```{r}
+# We can plot the prediction of all kfold test sets to visually inspect
+# separation of classes
+# Caution: next plot only is informative if the models stability is good,
+# If the models only have 1 component, a histogram instead of a scores plot
+# will be plotted
+plot_bootstrap_multimodel(bp_results, peak_table, label)
+
+```
+
+Also, we can compare the general CR with the vips CR, to see how it change when we only use the important vips selected in that fold.
+
+```{r}
+paste("PLSDA CR of fold 1 is: ",
+            bp_results$kfold_results[[1]]$general_CR)
+paste("PLS CR of fold 1, using only important vips is: ",
+            bp_results$kfold_results[[1]]$vips_CR)
+```
+
+
+## Save Results
+
+```{r}
+output_dir_node10 <- file.path(output_dir, "10-machine_learning")
+fs::dir_create(output_dir_node10)
+
+model_rds <- file.path(output_dir_node10, "nmr_data_analysis_model.rds")
+#confusion_matrix_fn <- file.path(output_dir_node10, "confusion_matrix.csv")
+VIPs_table_fn <- file.path(output_dir_node10, "VIPs.csv")
+#permutations_fn <- file.path(output_dir_node10, "permutations.csv")
+
+saveRDS(model, model_rds)
+utils::write.csv(VIPs, VIPs_table_fn, row.names = FALSE)
+#utils::write.csv(permutations, permutations_fn)
+
+```
+
+# Node 11: Identification
+
+Finally, AlpsNMR allows an identification step, in which we can select between plasma/serum, urine and cell functions giving a ranked dataframe with ppm and proposed candidates by the Human Metabolome Database (http://www.hmdb.ca). However, this needs to be double-checked, as there is overlap between several potential compounds for a given ppm value and different specific metabolite-shifts, this should be carefully taken as a first step in the identification.
+First, we extract a vector with significant ppm values. Then, we run "nmr_identify_regions_blood". You can set the number of proposed candidates, but in this particular case, we set to 4. Even though, several NAs in the identification corresponded to Supplemental Table 1 in Supplemental Material.
+
+## Autoselected features (blood samples)
+
+```{r}
+ppm_to_assign <- as.numeric(gsub("ppm_", "", VIPs))
+assignation <-
+  dplyr::select(nmr_identify_regions_blood(ppm_to_assign,
+                                           num_proposed_compounds = 4),
+                -Height)
+assignation_NArm <- na.omit(assignation)
+assignation
+assignation_NArm
+```
+
+
+## Save Results
+
+```{r}
+output_dir_node11 <- file.path(output_dir, "11-identification")
+fs::dir_create(output_dir_node11)
+
+identification_fn <- file.path(output_dir_node11, "NMR_identification.csv")
+identification_NArm_fn <- file.path(output_dir_node11, "NMR_identification_NArm.csv")
+
+utils::write.csv(assignation, identification_fn, row.names = FALSE)
+utils::write.csv(assignation_NArm, identification_NArm_fn, row.names = FALSE)
+
+sessionInfo()
+```
