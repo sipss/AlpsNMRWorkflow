@@ -15,6 +15,11 @@ knitr::opts_chunk$set(echo = TRUE)
 This is an example of using AlpsNMR package on the MTBLS242 dataset structured as a pipeline so that inputs are needed and outputs are obtained in the selected folders. Edit "inputs" to match your parameters and just run the "code to run" for the pipeline execution. However, you can see the vignettes and use the functions as you wish. You can download the MTBLS242 dataset from MetaboLights database:
 https://www.ebi.ac.uk/metabolights/MTBLS242
 
+**Download the MTBLS242 dataset containing 1H-NMR spectra and metadata:**
+
+https://dl.dropboxusercontent.com/s/0snivrsd7m82yey/MTBLS242.zip?dl=0
+
+
 ```{r}
 library(AlpsNMR)
 library(BiocParallel)
@@ -41,7 +46,10 @@ Loads samples from a specified directory into a `nmr_dataset` object. Then we ca
 ## Input parameters
 
 ```{r}
-# Path of NMR samples downloaded from https://www.ebi.ac.uk/metabolights/MTBLS242:
+# Path of NMR samples downloaded from https://www.ebi.ac.uk/metabolights/MTBLS242/ or
+
+# https://dl.dropboxusercontent.com/s/0snivrsd7m82yey/MTBLS242.zip?dl=0
+
 dataset_path_nmr <- "C:/Users/Biosignal/Desktop/Seminario_metabolomics/MTBLS242"
 
 # Files/directories ending in "s" corresponding to the spectra in the dataset:
@@ -51,7 +59,7 @@ filename_glob <- "*s"
 ## Code to run
 
 ```{r node1-load-samples, message=FALSE, warning=FALSE}
-register(SnowParam((num_workers), progressbar = TRUE))
+register(SnowParam((num_workers)))
 
 NMRExperiments <- as.character(fs::dir_ls(dataset_path_nmr, glob = filename_glob))
 nmr_dataset <- nmr_read_samples(NMRExperiments)
@@ -210,7 +218,7 @@ message("Detecting peaks...")
 peak_data <- nmr_detect_peaks(nmr_dataset,
                               nDivRange_ppm = nDivRange_ppm,
                               scales = scales,
-                              baselineThresh = 0,
+                              baselineThresh = baselineThresh,
                               SNR.Th = SNR.Th)
 
 # Step 2: Finding the reference spectrum for alignment
