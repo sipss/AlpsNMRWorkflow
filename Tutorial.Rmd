@@ -298,7 +298,8 @@ peak_data_integ <- dplyr::filter(peak_data, NMRExperiment == !!NMRExp_ref)
 nmr_peak_table <- nmr_integrate_peak_positions(
   samples = nmr_dataset,
   peak_pos_ppm = peak_data_integ$ppm,
-  peak_width_ppm = peak_width_ppm)
+  peak_width_ppm = peak_width_ppm,
+  fix_baseline = FALSE)
 
 nmr_peak_table_completed <- get_integration_with_metadata(nmr_peak_table)
 
